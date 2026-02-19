@@ -1,10 +1,20 @@
 # Terraform
 **/.terraform/
 *.tfstate
+*.tfstate.*
 *.tfstate.backup
 *.tfvars
 !*.tfvars.example
 .terraform.lock.hcl
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
 
 # 민감 파일
 *.pem
