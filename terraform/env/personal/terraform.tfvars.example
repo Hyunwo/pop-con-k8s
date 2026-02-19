@@ -1,0 +1,23 @@
+# =============================================
+# 개인 실습용 terraform.tfvars 예시
+# 실제 값은 terraform.tfvars 파일에 작성 (.gitignore 처리됨)
+# =============================================
+
+# VPC
+vpc_name             = "personal-popcon-vpc"
+vpc_cidr             = "10.0.0.0/16"
+azs                  = ["ap-northeast-2a", "ap-northeast-2c"]
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
+
+# ECR
+ecr_name = "dev-app"
+
+# EC2
+instance_type = "t3.medium"   # k3s 최소 권장: t3.medium (2vCPU, 4GB)
+key_name      = "my-key"      # 개인 AWS 계정의 키페어 이름
+
+# DB (임시값)
+db_username      = "popcon_user"
+db_password      = "popcon1234!"
+db_root_password = "root1234!"

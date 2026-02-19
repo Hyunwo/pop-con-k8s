@@ -1,0 +1,17 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# 민감 파일
+*.pem
+*.key
+.env
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
