@@ -56,9 +56,19 @@ resource "aws_instance" "this" {
   associate_public_ip_address = true
   key_name = var.key_name
 
+  root_block_device {
+    volume_size = 30
+    volume_type = "gp3"
+  }
+
   user_data = <<-EOT
     #!/bin/bash
     dnf update -y
+
+    # SSM Agent 설치 및 시작
+    dnf install -y amazon-ssm-agent
+    systemctl start amazon-ssm-agent
+    systemctl enable amazon-ssm-agent
 
     # Docker 설치
     dnf install -y docker
