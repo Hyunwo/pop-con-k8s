@@ -1,6 +1,6 @@
 # ArgoCD + GitOps 연동 가이드
 
-k3s 위에 ArgoCD를 설치하고, GitHub 레포(pop-con-k8s)를 GitOps 저장소로 연결하는 전체 가이드입니다.
+k3s 위에 ArgoCD를 설치하고, GitHub 레포(gitops)를 GitOps 저장소로 연결하는 전체 가이드입니다.
 이 구조는 EKS로 전환 시에도 동일하게 사용됩니다.
 
 ---
@@ -14,7 +14,7 @@ k3s 위에 ArgoCD를 설치하고, GitHub 레포(pop-con-k8s)를 GitOps 저장�
 [ pop-con-backend / pop-con-frontend ]  ← 앱 소스 레포
     │ GitHub Actions: 빌드 → 이미지 푸시 → GitOps 레포 이미지 태그 업데이트
     ▼
-[ pop-con-k8s ]  ← GitOps 레포 (이 레포)
+[ gitops ]  ← GitOps 레포 (팀 레포)
     │ manifest 변경 감지
     ▼
 [ ArgoCD ]  ← k3s 위에 설치
@@ -48,7 +48,9 @@ k3s 위에 ArgoCD를 설치하고, GitHub 레포(pop-con-k8s)를 GitOps 저장�
 ### 목표 구조
 
 ```
-pop-con-k8s/
+gitops/
+ ├── docker-compose.yml          ← 기존 (Docker 배포용)
+ ├── deploy.sh
  ├── k8s/
  │    ├── base/                      ← 공통 manifest (환경 무관)
  │    │    ├── kustomization.yaml
@@ -239,7 +241,7 @@ spec:
   project: default
 
   source:
-    repoURL: https://github.com/<org>/pop-con-k8s.git
+    repoURL: https://github.com/kt-cloud-TECHUP-T1/gitops.git
     targetRevision: main              # 바라볼 브랜치
     path: k8s/overlays/dev            # Kustomize overlay 경로
 
@@ -268,7 +270,7 @@ sudo kubectl get application -n argocd
 또는 ArgoCD 웹 UI에서:
 1. `+ NEW APP` 클릭
 2. Application Name: `popcon-dev`
-3. Repository URL: `https://github.com/<org>/pop-con-k8s.git`
+3. Repository URL: `https://github.com/kt-cloud-TECHUP-T1/gitops.git`
 4. Path: `k8s/overlays/dev`
 5. Cluster: `https://kubernetes.default.svc`
 6. Namespace: `popcon`
@@ -283,7 +285,7 @@ sudo kubectl get application -n argocd
 ```
 코드 push → GitHub Actions
   → Docker 빌드 → ECR 푸시 (backend-<sha> 태그)
-  → pop-con-k8s 레포의 kustomization.yaml 이미지 태그 업데이트
+  → gitops 레포의 kustomization.yaml 이미지 태그 업데이트
   → ArgoCD가 변경 감지 → 자동 배포
 ```
 
@@ -331,8 +333,8 @@ jobs:
           IMAGE_TAG: ${{ steps.build.outputs.image_tag }}
           GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
         run: |
-          git clone https://x-access-token:${GITOPS_TOKEN}@github.com/<org>/pop-con-k8s.git
-          cd pop-con-k8s
+          git clone https://x-access-token:${GITOPS_TOKEN}@github.com/kt-cloud-TECHUP-T1/gitops.git
+          cd gitops
 
           # kustomization.yaml의 이미지 태그 업데이트
           cd k8s/overlays/dev
@@ -354,7 +356,7 @@ pop-con-backend 레포의 GitHub Secrets에 추가:
 Settings → Secrets and variables → Actions → New repository secret
 
 Name:  GITOPS_TOKEN
-Value: GitHub Personal Access Token (pop-con-k8s 레포 write 권한 필요)
+Value: GitHub Personal Access Token (gitops 레포 write 권한 필요)
        → GitHub → Settings → Developer settings → Personal access tokens
        → Permissions: repo (전체)
 ```
