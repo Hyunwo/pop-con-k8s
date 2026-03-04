@@ -62,11 +62,11 @@ gitops/
  │    │    └── backend.yaml
  │    │
  │    └── overlays/
- │         ├── dev/                  ← dev 환경 (현재 k3s)
+ │         ├── staging/              ← staging 환경 (k3s)
  │         │    ├── kustomization.yaml
  │         │    └── backend-patch.yaml   (이미지 태그, 리소스 등 오버라이드)
  │         │
- │         └── prod/                 ← prod 환경 (추후 EKS)
+ │         └── prod/                 ← prod 환경 (EKS)
  │              ├── kustomization.yaml
  │              └── backend-patch.yaml
  │
@@ -89,7 +89,7 @@ resources:
   - backend.yaml
 ```
 
-### overlays/dev/kustomization.yaml
+### overlays/staging/kustomization.yaml
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -106,9 +106,9 @@ images:
     newTag: backend-latest    # CI 실행 시 backend-<git-sha> 로 자동 변경
 ```
 
-### overlays/dev/backend-patch.yaml
+### overlays/staging/backend-patch.yaml
 
-dev 환경에서만 다른 설정이 있을 경우 여기서 오버라이드합니다.
+staging 환경에서만 다른 설정이 있을 경우 여기서 오버라이드합니다.
 
 ```yaml
 apiVersion: apps/v1
@@ -149,8 +149,8 @@ images:
 
 > **Kustomize 로컬 확인 방법**
 > ```bash
-> kubectl kustomize k8s/overlays/dev    # 렌더링 결과 확인
-> kubectl apply -k k8s/overlays/dev     # 직접 적용 (ArgoCD 없을 때)
+> kubectl kustomize k8s/overlays/staging    # 렌더링 결과 확인
+> kubectl apply -k k8s/overlays/staging     # 직접 적용 (ArgoCD 없을 때)
 > ```
 
 ---
@@ -232,7 +232,7 @@ ArgoCD가 어떤 레포의 어떤 경로를 바라볼지 정의합니다.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: popcon-dev
+  name: popcon-staging
   namespace: argocd
   # App 삭제 시 k8s 리소스도 함께 삭제 (주의: 운영에서는 설정 검토 필요)
   finalizers:
@@ -243,7 +243,7 @@ spec:
   source:
     repoURL: https://github.com/kt-cloud-TECHUP-T1/gitops.git
     targetRevision: main              # 바라볼 브랜치
-    path: k8s/overlays/dev            # Kustomize overlay 경로
+    path: k8s/overlays/staging        # Kustomize overlay 경로
 
   destination:
     server: https://kubernetes.default.svc   # 현재 클러스터 (자기 자신)
@@ -269,9 +269,9 @@ sudo kubectl get application -n argocd
 
 또는 ArgoCD 웹 UI에서:
 1. `+ NEW APP` 클릭
-2. Application Name: `popcon-dev`
+2. Application Name: `popcon-staging`
 3. Repository URL: `https://github.com/kt-cloud-TECHUP-T1/gitops.git`
-4. Path: `k8s/overlays/dev`
+4. Path: `k8s/overlays/staging`
 5. Cluster: `https://kubernetes.default.svc`
 6. Namespace: `popcon`
 7. Sync Policy: `Automatic` 체크
@@ -337,7 +337,7 @@ jobs:
           cd gitops
 
           # kustomization.yaml의 이미지 태그 업데이트
-          cd k8s/overlays/dev
+          cd k8s/overlays/staging
           kustomize edit set image \
             654654578161.dkr.ecr.ap-northeast-2.amazonaws.com/dev-app=${IMAGE_TAG}
 
@@ -372,7 +372,7 @@ Value: GitHub Personal Access Token (gitops 레포 write 권한 필요)
 sudo kubectl get application -n argocd
 
 # 상세 상태
-sudo kubectl describe application popcon-dev -n argocd
+sudo kubectl describe application popcon-staging -n argocd
 ```
 
 | 상태 | 의미 |
@@ -385,20 +385,20 @@ sudo kubectl describe application popcon-dev -n argocd
 ### 수동 동기화 (자동 동기화 전 테스트용)
 
 ```bash
-argocd app sync popcon-dev
+argocd app sync popcon-staging
 ```
 
 ### 배포 히스토리 확인
 
 ```bash
-argocd app history popcon-dev
+argocd app history popcon-staging
 ```
 
 ### 롤백
 
 ```bash
 # 이전 버전으로 롤백
-argocd app rollback popcon-dev <revision-number>
+argocd app rollback popcon-staging <revision-number>
 ```
 
 ---
@@ -472,14 +472,14 @@ sudo kubectl get pods -n argocd
 sudo kubectl get application -n argocd
 
 # 수동 동기화
-argocd app sync popcon-dev
+argocd app sync popcon-staging
 
 # 앱 상태 확인
-argocd app get popcon-dev
+argocd app get popcon-staging
 
 # 로그 확인
 sudo kubectl logs -n argocd deployment/argocd-server
 
 # Kustomize 렌더링 미리보기 (배포 전 확인)
-kubectl kustomize k8s/overlays/dev
+kubectl kustomize k8s/overlays/staging
 ```
