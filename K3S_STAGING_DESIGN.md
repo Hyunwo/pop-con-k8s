@@ -30,10 +30,13 @@ GitHub Actions (CI/CD)
       │     ├── app.도메인.com     → frontend Pod
       │     └── api.도메인.com     → backend Pod
       ├── frontend Deployment
-      ├── backend Deployment
-      ├── mysql Deployment + PVC
-      └── redis Deployment
+      └── backend Deployment
+            ├── RDS (MySQL)         ← 외부 관리형 DB
+            └── ElastiCache (Redis) ← 외부 관리형 캐시
 ```
+
+> **staging은 MySQL/Redis를 k8s Pod으로 운영하지 않는다.**
+> RDS와 ElastiCache를 사용하므로 mysql.yaml, redis.yaml 매니페스트가 불필요하다.
 
 ### 환경별 비교
 
@@ -41,10 +44,12 @@ GitHub Actions (CI/CD)
 |------|-----|---------|------------|
 | 실행 방식 | docker-compose | k3s | EKS |
 | 서버 | EC2 단일 | EC2 단일 | EKS 멀티 노드 |
+| DB | EC2 내 MySQL 컨테이너 | RDS (외부) | RDS (외부) |
+| Cache | EC2 내 Redis 컨테이너 | ElastiCache (외부) | ElastiCache (외부) |
 | Ingress | ALB | Traefik (k3s 내장) | AWS ALB Controller |
-| Secret 관리 | SSM → .env | SSM → k8s Secret | SSM → k8s Secret |
+| Secret 관리 | SSM `/popcon/*` → .env | SSM `/popcon/staging/*` → k8s Secret | SSM → k8s Secret |
 | 이미지 | ECR latest | ECR latest | ECR 버전 태그 |
-| 비용 | 낮음 | 낮음 | 높음 |
+| 비용 | 낮음 | 중간 (RDS/ElastiCache) | 높음 |
 
 ---
 
@@ -56,10 +61,10 @@ GitHub Actions (CI/CD)
 docker-compose.yml          k8s 매니페스트
 ─────────────────────────────────────────────
 networks: popcon-network  → 00-namespace.yaml
-environment: DB_HOST=...  → 01-configmap.yaml
+environment: DB_HOST=...  → 01-configmap.yaml    (RDS 엔드포인트로 설정)
 environment: DB_PASSWORD= → 02-secret.yaml
-mysql: ...                → 03-mysql.yaml
-redis: ...                → 04-redis.yaml
+mysql: ...                → ❌ 불필요 (RDS 사용)
+redis: ...                → ❌ 불필요 (ElastiCache 사용)
 backend: ...              → 05-backend.yaml
 frontend: ...             → 06-frontend.yaml
 ports: 외부 노출           → 07-ingress.yaml
@@ -103,15 +108,16 @@ PVC → PV(실제 디스크) → Pod 마운트
 ```
 k8s/
 ├── 00-namespace.yaml     # 네임스페이스 (리소스 격리)
-├── 01-configmap.yaml     # 평문 환경변수
+├── 01-configmap.yaml     # 평문 환경변수 (RDS/ElastiCache 엔드포인트 포함)
 ├── 02-secret.yaml        # 민감 환경변수 (base64 인코딩)
-├── 03-mysql.yaml         # MySQL (PVC + Deployment + Service)
-├── 04-redis.yaml         # Redis (Deployment + Service)
-├── 05-backend.yaml       # 백엔드 (Deployment + Service)
-├── 06-frontend.yaml      # 프론트엔드 (Deployment + Service)
-└── 07-ingress.yaml       # Traefik Ingress (외부 라우팅)
+├── 03-backend.yaml       # 백엔드 (Deployment + Service)
+├── 04-frontend.yaml      # 프론트엔드 (Deployment + Service)
+└── 05-ingress.yaml       # Traefik Ingress (외부 라우팅)
 ```
 
+> **mysql.yaml, redis.yaml 없음**: staging은 RDS/ElastiCache를 사용하므로
+> k8s 내부에 MySQL/Redis Pod을 띄우지 않는다.
+>
 > **번호를 붙이는 이유**: `kubectl apply -f k8s/` 실행 시
 > 알파벳 순서로 적용되므로 의존성 순서 보장
 
@@ -144,13 +150,19 @@ metadata:
   namespace: popcon
 data:
   SPRING_PROFILES_ACTIVE: "prod"
-  DB_HOST: "popcon-mysql"      # mysql Service 이름과 일치
+  DB_HOST: "t1-staging-rds.xxxxxxxxxx.ap-northeast-2.rds.amazonaws.com"  # RDS 엔드포인트
   DB_PORT: "3306"
-  DB_NAME: "popcon"
   JAVA_OPTS: "-Xms512m -Xmx512m"
-  REDIS_HOST: "popcon-redis"   # redis Service 이름과 일치
+  REDIS_HOST: "t1-staging-redis.xxxxxx.cache.amazonaws.com"              # ElastiCache 엔드포인트
   REDIS_PORT: "6379"
+  STATE_TTL_SECONDS: "300"
+  OAUTH_BASE_URL: "https://stagingapi.popcon.store"
+  FRONTEND_BASE_URL: "https://staging.popcon.store"
 ```
+
+> RDS/ElastiCache 엔드포인트는 AWS 콘솔에서 확인:
+> - RDS: `AWS Console → RDS → Databases → t1-staging-rds → Endpoint`
+> - ElastiCache: `AWS Console → ElastiCache → t1-staging-redis → Primary Endpoint`
 
 ---
 
@@ -474,40 +486,80 @@ spec:
 ### 문제점
 secret.yaml에 값을 직접 작성하면 Git에 커밋 불가.
 
+### SSM Parameter Store 경로 구조
+
+dev와 staging은 SSM 경로가 **분리**되어 있다.
+
+```
+/popcon/                  ← dev 환경 파라미터
+  ├── DB_HOST
+  ├── DB_NAME
+  ├── DB_USERNAME
+  ├── DB_PASSWORD
+  ├── REDIS_PASSWORD
+  └── ECR_REGISTRY
+
+/popcon/staging/          ← staging 환경 파라미터 (RDS/ElastiCache 엔드포인트 등)
+  ├── DB_HOST             (RDS 엔드포인트)
+  ├── DB_NAME
+  ├── DB_USERNAME
+  ├── DB_PASSWORD
+  ├── REDIS_HOST          (ElastiCache 엔드포인트)
+  └── REDIS_PASSWORD
+```
+
+> **⚠️ deploy.sh `--recursive` 주의**: dev의 deploy.sh는 `/popcon` 경로를 `--recursive`로 읽는다.
+> 이 경우 `/popcon/staging/DB_HOST` 같은 staging 파라미터도 함께 읽혀
+> `staging/DB_HOST` 라는 엉뚱한 변수명이 .env에 들어간다.
+> dev 배포 시에는 staging/ 접두사가 붙은 줄을 필터링해야 한다 (deploy.sh 참고).
+
 ### 해결 방법 — SSM에서 읽어 자동 생성
 
-dev 환경의 deploy.sh와 동일한 원리. SSM에서 값을 읽어 k8s Secret을 생성하는 스크립트 작성.
+SSM에서 staging 경로의 값을 읽어 k8s Secret을 생성하는 스크립트 작성.
 
 ```bash
 #!/bin/bash
-# create-secret.sh
+# create-secret.sh (k8s/create-secret.sh)
 
-PROJECT_NAME="popcon"
+PROJECT_NAME="popcon/staging"   # staging 환경 경로
 REGION="ap-northeast-2"
 NAMESPACE="popcon"
 
-# SSM에서 값 읽기
-DB_USERNAME=$(aws ssm get-parameter --name "/${PROJECT_NAME}/DB_USERNAME" \
-  --with-decryption --query Parameter.Value --output text --region $REGION)
-DB_PASSWORD=$(aws ssm get-parameter --name "/${PROJECT_NAME}/DB_PASSWORD" \
-  --with-decryption --query Parameter.Value --output text --region $REGION)
-DB_ROOT_PASSWORD=$(aws ssm get-parameter --name "/${PROJECT_NAME}/DB_ROOT_PASSWORD" \
-  --with-decryption --query Parameter.Value --output text --region $REGION)
-DB_NAME=$(aws ssm get-parameter --name "/${PROJECT_NAME}/DB_NAME" \
-  --query Parameter.Value --output text --region $REGION)
-REDIS_PASSWORD=$(aws ssm get-parameter --name "/${PROJECT_NAME}/REDIS_PASSWORD" \
-  --with-decryption --query Parameter.Value --output text --region $REGION)
+get_param() {
+  aws ssm get-parameter \
+    --name "/${PROJECT_NAME}/$1" \
+    --with-decryption \
+    --query "Parameter.Value" \
+    --output text \
+    --region $REGION
+}
+
+DB_USERNAME=$(get_param DB_USERNAME)
+DB_PASSWORD=$(get_param DB_PASSWORD)
+DB_NAME=$(get_param DB_NAME)
+REDIS_PASSWORD=$(get_param REDIS_PASSWORD)
+KAKAO_CLIENT_ID=$(get_param KAKAO_CLIENT_ID)
+KAKAO_CLIENT_SECRET=$(get_param KAKAO_CLIENT_SECRET)
+NAVER_CLIENT_ID=$(get_param NAVER_CLIENT_ID)
+NAVER_CLIENT_SECRET=$(get_param NAVER_CLIENT_SECRET)
+JWT_SECRET=$(get_param JWT_SECRET)
 
 # k8s Secret 생성
 kubectl create secret generic popcon-secret \
   --from-literal=DB_USERNAME="$DB_USERNAME" \
   --from-literal=DB_PASSWORD="$DB_PASSWORD" \
-  --from-literal=DB_ROOT_PASSWORD="$DB_ROOT_PASSWORD" \
   --from-literal=DB_NAME="$DB_NAME" \
   --from-literal=REDIS_PASSWORD="$REDIS_PASSWORD" \
+  --from-literal=KAKAO_CLIENT_ID="$KAKAO_CLIENT_ID" \
+  --from-literal=KAKAO_CLIENT_SECRET="$KAKAO_CLIENT_SECRET" \
+  --from-literal=NAVER_CLIENT_ID="$NAVER_CLIENT_ID" \
+  --from-literal=NAVER_CLIENT_SECRET="$NAVER_CLIENT_SECRET" \
+  --from-literal=JWT_SECRET="$JWT_SECRET" \
   --namespace=$NAMESPACE \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
+
+> DB_ROOT_PASSWORD는 RDS 사용 시 불필요. RDS는 생성 시 root 비밀번호를 별도 설정한다.
 
 ---
 

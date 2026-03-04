@@ -57,14 +57,15 @@ gitops/
  │    │    ├── namespace.yaml
  │    │    ├── configmap.yaml
  │    │    ├── secret.yaml
- │    │    ├── mysql.yaml
- │    │    ├── redis.yaml
- │    │    └── backend.yaml
+ │    │    ├── backend.yaml
+ │    │    └── frontend.yaml         ← 프론트엔드 포함
+ │    │    (mysql.yaml, redis.yaml 없음 → staging은 RDS/ElastiCache 사용)
  │    │
  │    └── overlays/
  │         ├── staging/              ← staging 환경 (k3s)
  │         │    ├── kustomization.yaml
- │         │    └── backend-patch.yaml   (이미지 태그, 리소스 등 오버라이드)
+ │         │    ├── configmap-patch.yaml   (RDS/ElastiCache 엔드포인트 오버라이드)
+ │         │    └── backend-patch.yaml     (이미지 태그, 리소스 등 오버라이드)
  │         │
  │         └── prod/                 ← prod 환경 (EKS)
  │              ├── kustomization.yaml
@@ -84,10 +85,13 @@ resources:
   - namespace.yaml
   - secret.yaml
   - configmap.yaml
-  - mysql.yaml
-  - redis.yaml
   - backend.yaml
+  - frontend.yaml
 ```
+
+> **mysql.yaml, redis.yaml 없음**: staging은 RDS(MySQL)와 ElastiCache(Redis)를 사용하므로
+> k8s 내부에 DB/캐시 Pod을 띄우지 않는다. DB 연결 정보는 configmap-patch.yaml에서
+> RDS/ElastiCache 엔드포인트로 오버라이드한다.
 
 ### overlays/staging/kustomization.yaml
 
@@ -100,11 +104,34 @@ namespace: popcon
 resources:
   - ../../base
 
+# RDS/ElastiCache 엔드포인트 오버라이드
+patches:
+  - path: configmap-patch.yaml
+
 # 이미지 태그 오버라이드 (CI가 이 값을 업데이트)
 images:
   - name: 654654578161.dkr.ecr.ap-northeast-2.amazonaws.com/dev-app
     newTag: backend-latest    # CI 실행 시 backend-<git-sha> 로 자동 변경
 ```
+
+### overlays/staging/configmap-patch.yaml
+
+base/configmap.yaml의 localhost 값을 실제 RDS/ElastiCache 엔드포인트로 덮어쓴다.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: popcon-config
+  namespace: popcon
+data:
+  DB_HOST: "t1-staging-rds.xxxxxxxxxx.ap-northeast-2.rds.amazonaws.com"
+  REDIS_HOST: "t1-staging-redis.xxxxxx.cache.amazonaws.com"
+  OAUTH_BASE_URL: "https://stagingapi.popcon.store"
+  FRONTEND_BASE_URL: "https://staging.popcon.store"
+```
+
+> 실제 엔드포인트는 `AWS Console → RDS / ElastiCache`에서 확인 후 입력한다.
 
 ### overlays/staging/backend-patch.yaml
 
