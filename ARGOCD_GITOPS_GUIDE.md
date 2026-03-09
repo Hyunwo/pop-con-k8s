@@ -1,7 +1,7 @@
 # ArgoCD + GitOps 연동 가이드
 
 k3s 위에 ArgoCD를 설치하고, GitHub 레포(gitops)를 GitOps 저장소로 연결하는 전체 가이드입니다.
-이 구조는 EKS로 전환 시에도 동일하게 사용됩니다.
+실제 구현을 기준으로 작성되었습니다.
 
 ---
 
@@ -12,173 +12,102 @@ k3s 위에 ArgoCD를 설치하고, GitHub 레포(gitops)를 GitOps 저장소로 
     │ git push (코드 변경)
     ▼
 [ pop-con-backend / pop-con-frontend ]  ← 앱 소스 레포
-    │ GitHub Actions: 빌드 → 이미지 푸시 → GitOps 레포 이미지 태그 업데이트
+    │ GitHub Actions: 빌드 → ECR 이미지 푸시 → GitOps 레포 이미지 태그 업데이트
     ▼
-[ gitops ]  ← GitOps 레포 (팀 레포)
+[ gitops ]  ← GitOps 레포 (팀 레포, main 브랜치 기준)
     │ manifest 변경 감지
     ▼
-[ ArgoCD ]  ← k3s 위에 설치
+[ ArgoCD ]  ← k3s 위에 설치, argocd.popcon.store 접속
     │ 자동 동기화 (Auto Sync)
     ▼
-[ k3s / EKS ]  ← 실제 배포 환경
+[ k3s ]  ← staging EC2 (private subnet), Traefik Ingress
+    ▼
+[ ALB ]  ← HTTPS 종단, Cloudflare CNAME 연결
 ```
 
 **핵심 원칙**: 클러스터 상태는 항상 GitOps 레포의 manifest를 기준으로 합니다.
-`kubectl apply`를 직접 실행하지 않습니다.
 
 ---
 
 ## 목차
 
-1. [GitOps 레포 구조 재편성](#1-gitops-레포-구조-재편성)
+1. [GitOps 레포 구조](#1-gitops-레포-구조)
 2. [ArgoCD 설치](#2-argocd-설치)
-3. [ArgoCD 접속 및 초기 설정](#3-argocd-접속-및-초기-설정)
+3. [GitHub 레포 연결 (PAT 인증)](#3-github-레포-연결-pat-인증)
 4. [ArgoCD Application 생성](#4-argocd-application-생성)
-5. [CI 파이프라인 연동 (이미지 태그 자동 업데이트)](#5-ci-파이프라인-연동)
-6. [배포 흐름 확인](#6-배포-흐름-확인)
-7. [EKS 전환 시 변경사항](#7-eks-전환-시-변경사항)
+5. [ArgoCD 도메인 연결](#5-argocd-도메인-연결)
+6. [모니터링 스택 배포](#6-모니터링-스택-배포)
+7. [CI 파이프라인 연동](#7-ci-파이프라인-연동)
+8. [트러블슈팅](#8-트러블슈팅)
+9. [빠른 참고 명령어](#9-빠른-참고-명령어)
 
 ---
 
-## 1. GitOps 레포 구조 재편성
-
-현재 `k8s/` 폴더를 환경별로 분리합니다.
-**Kustomize**를 사용합니다 (kubectl에 내장, 별도 설치 불필요).
-
-### 목표 구조
+## 1. GitOps 레포 구조
 
 ```
 gitops/
- ├── docker-compose.yml          ← 기존 (Docker 배포용)
- ├── deploy.sh
- ├── k8s/
- │    ├── base/                      ← 공통 manifest (환경 무관)
- │    │    ├── kustomization.yaml
- │    │    ├── namespace.yaml
- │    │    ├── configmap.yaml
- │    │    ├── secret.yaml
- │    │    ├── backend.yaml
- │    │    └── frontend.yaml         ← 프론트엔드 포함
- │    │    (mysql.yaml, redis.yaml 없음 → staging은 RDS/ElastiCache 사용)
- │    │
- │    └── overlays/
- │         ├── staging/              ← staging 환경 (k3s)
- │         │    ├── kustomization.yaml
- │         │    ├── configmap-patch.yaml   (RDS/ElastiCache 엔드포인트 오버라이드)
- │         │    └── backend-patch.yaml     (이미지 태그, 리소스 등 오버라이드)
- │         │
- │         └── prod/                 ← prod 환경 (EKS)
- │              ├── kustomization.yaml
- │              └── backend-patch.yaml
+ ├── argocd/
+ │    ├── application.yaml          ← ArgoCD Application 정의 (수동 1회 apply)
+ │    ├── argocd-ingress.yaml       ← argocd.popcon.store Ingress
+ │    └── argocd-insecure-cm.yaml   ← ArgoCD HTTP 모드 설정
  │
- └── argocd/
-      └── application.yaml          ← ArgoCD Application 정의
+ └── staging/
+      ├── kustomization.yaml        ← 이미지 태그 관리 (CI가 자동 업데이트)
+      ├── namespace.yaml
+      ├── ingress.yaml              ← Traefik Ingress (staging/stagingapi 도메인)
+      ├── ecr-auth-cronjob.yaml     ← ECR 인증 자동 갱신
+      ├── backend/
+      │    ├── auth/
+      │    │    ├── deployment.yaml
+      │    │    └── service.yaml
+      │    └── user/
+      │         ├── deployment.yaml
+      │         └── service.yaml
+      ├── frontend/
+      │    ├── deployment.yaml
+      │    └── service.yaml
+      ├── scripts/
+      │    └── refresh-ecr-secret.sh
+      └── monitoring/
+           ├── argocd-apps/
+           │    ├── prometheus-app.yaml   ← kube-prometheus-stack Application
+           │    └── loki-app.yaml        ← loki-stack Application
+           └── helm-values/
+                ├── values-prometheus.yaml
+                └── values-loki.yaml
 ```
 
-### base/kustomization.yaml
+### staging/kustomization.yaml (이미지 태그 관리)
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+
+namespace: popcon-staging
 
 resources:
   - namespace.yaml
-  - secret.yaml
-  - configmap.yaml
-  - backend.yaml
-  - frontend.yaml
-```
-
-> **mysql.yaml, redis.yaml 없음**: staging은 RDS(MySQL)와 ElastiCache(Redis)를 사용하므로
-> k8s 내부에 DB/캐시 Pod을 띄우지 않는다. DB 연결 정보는 configmap-patch.yaml에서
-> RDS/ElastiCache 엔드포인트로 오버라이드한다.
-
-### overlays/staging/kustomization.yaml
-
-```yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-namespace: popcon
-
-resources:
-  - ../../base
-
-# RDS/ElastiCache 엔드포인트 오버라이드
-patches:
-  - path: configmap-patch.yaml
-
-# 이미지 태그 오버라이드 (CI가 이 값을 업데이트)
-images:
-  - name: 654654578161.dkr.ecr.ap-northeast-2.amazonaws.com/dev-app
-    newTag: backend-latest    # CI 실행 시 backend-<git-sha> 로 자동 변경
-```
-
-### overlays/staging/configmap-patch.yaml
-
-base/configmap.yaml의 localhost 값을 실제 RDS/ElastiCache 엔드포인트로 덮어쓴다.
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: popcon-config
-  namespace: popcon
-data:
-  DB_HOST: "t1-staging-rds.xxxxxxxxxx.ap-northeast-2.rds.amazonaws.com"
-  REDIS_HOST: "t1-staging-redis.xxxxxx.cache.amazonaws.com"
-  OAUTH_BASE_URL: "https://stagingapi.popcon.store"
-  FRONTEND_BASE_URL: "https://staging.popcon.store"
-```
-
-> 실제 엔드포인트는 `AWS Console → RDS / ElastiCache`에서 확인 후 입력한다.
-
-### overlays/staging/backend-patch.yaml
-
-staging 환경에서만 다른 설정이 있을 경우 여기서 오버라이드합니다.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: popcon-backend
-  namespace: popcon
-spec:
-  replicas: 1                # prod은 2~3으로 설정
-  template:
-    spec:
-      containers:
-        - name: backend
-          resources:
-            requests:
-              memory: "512Mi"
-              cpu: "250m"
-            limits:
-              memory: "1Gi"
-              cpu: "500m"
-```
-
-### overlays/prod/kustomization.yaml
-
-```yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-namespace: popcon
-
-resources:
-  - ../../base
+  - backend/auth/deployment.yaml
+  - backend/auth/service.yaml
+  - backend/user/deployment.yaml
+  - backend/user/service.yaml
+  - frontend/deployment.yaml
+  - frontend/service.yaml
+  - ingress.yaml
+  - ecr-auth-cronjob.yaml
 
 images:
-  - name: 654654578161.dkr.ecr.ap-northeast-2.amazonaws.com/dev-app
-    newTag: backend-latest
+  - name: auth-service
+    newName: 274130523831.dkr.ecr.ap-northeast-2.amazonaws.com/auth-service
+    newTag: latest    # CI 실행 시 자동 업데이트
+  - name: user-service
+    newName: 274130523831.dkr.ecr.ap-northeast-2.amazonaws.com/user-service
+    newTag: latest
+  - name: frontend
+    newName: 274130523831.dkr.ecr.ap-northeast-2.amazonaws.com/frontend
+    newTag: latest
 ```
-
-> **Kustomize 로컬 확인 방법**
-> ```bash
-> kubectl kustomize k8s/overlays/staging    # 렌더링 결과 확인
-> kubectl apply -k k8s/overlays/staging     # 직접 적용 (ArgoCD 없을 때)
-> ```
 
 ---
 
@@ -187,71 +116,79 @@ images:
 k3s EC2 내부에서 실행합니다.
 
 ```bash
-# ArgoCD 네임스페이스 생성 및 설치
+# ArgoCD 네임스페이스 생성
 sudo kubectl create namespace argocd
-sudo kubectl apply -n argocd \
+
+# ArgoCD 설치 (--server-side 필수: CRD annotation 크기 제한 우회)
+sudo kubectl apply -n argocd --server-side \
   -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-# 설치 확인 (모두 Running 될 때까지 대기 - 약 2분)
+# 설치 확인 (모두 Running 될 때까지 대기 - 약 2~3분)
 sudo kubectl get pods -n argocd -w
 ```
 
-### 외부 접근을 위한 NodePort 설정
+> **주의**: `--server-side` 없이 설치하면 아래 에러 발생
+> `"applicationsets.argoproj.io" is invalid: metadata.annotations: Too long`
+
+### k3s flannel NetworkPolicy 제거
+
+k3s 기본 CNI(flannel)는 NetworkPolicy를 지원하지 않습니다.
+ArgoCD 설치 후 반드시 제거해야 합니다.
 
 ```bash
-sudo kubectl patch svc argocd-server -n argocd \
-  -p '{"spec": {"type": "NodePort", "ports": [{"port": 443, "nodePort": 30443, "protocol": "TCP"}]}}'
-
-# 접속 확인
-sudo kubectl get svc -n argocd argocd-server
+sudo kubectl delete networkpolicy -n argocd --all
 ```
 
-> EC2 Security Group에서 포트 **30443** 인바운드 허용 필요 (AWS 콘솔에서 추가)
-
----
-
-## 3. ArgoCD 접속 및 초기 설정
+> 제거하지 않으면 argocd-repo-server가 argocd-server와 통신 불가
 
 ### 초기 비밀번호 확인
 
 ```bash
-# 초기 admin 비밀번호
 sudo kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath="{.data.password}" | base64 -d && echo
 ```
 
-### 웹 UI 접속
+---
+
+## 3. GitHub 레포 연결 (PAT 인증)
+
+ArgoCD가 private gitops 레포를 읽을 수 있도록 PAT(Personal Access Token)를 등록합니다.
+
+### PAT 발급
 
 ```
-https://<EC2-Public-IP>:30443
+GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)
+권한: repo (전체)
 ```
 
-- Username: `admin`
-- Password: 위에서 확인한 값
+### ArgoCD에 레포 등록
 
-### ArgoCD CLI 설치 (선택 - EC2 내부)
+ArgoCD UI → Settings → Repositories → Connect Repo
+
+```
+Connection Method: HTTPS
+Repository URL: https://github.com/kt-cloud-TECHUP-T1/gitops.git
+Username: <GitHub 개인 사용자명 (조직명 아님)>
+Password: <발급한 PAT>
+```
+
+또는 kubectl로 등록:
 
 ```bash
-curl -sSL -o argocd \
-  https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-chmod +x argocd
-sudo mv argocd /usr/local/bin/
+sudo kubectl create secret generic gitops-repo-secret \
+  -n argocd \
+  --from-literal=type=git \
+  --from-literal=url=https://github.com/kt-cloud-TECHUP-T1/gitops.git \
+  --from-literal=username=<GitHub사용자명> \
+  --from-literal=password=<PAT>
 
-# 로그인
-argocd login localhost:30443 --username admin --password <password> --insecure
-```
-
-### 비밀번호 변경 (권장)
-
-```bash
-argocd account update-password
+sudo kubectl label secret gitops-repo-secret \
+  -n argocd argocd.argoproj.io/secret-type=repository
 ```
 
 ---
 
 ## 4. ArgoCD Application 생성
-
-ArgoCD가 어떤 레포의 어떤 경로를 바라볼지 정의합니다.
 
 ### argocd/application.yaml
 
@@ -261,252 +198,293 @@ kind: Application
 metadata:
   name: popcon-staging
   namespace: argocd
-  # App 삭제 시 k8s 리소스도 함께 삭제 (주의: 운영에서는 설정 검토 필요)
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
-
   source:
-    repoURL: https://github.com/kt-cloud-TECHUP-T1/gitops.git
-    targetRevision: main              # 바라볼 브랜치
-    path: k8s/overlays/staging        # Kustomize overlay 경로
-
+    repoURL: https://github.com/kt-cloud-TECHUP-T1/gitops
+    targetRevision: main
+    path: staging
   destination:
-    server: https://kubernetes.default.svc   # 현재 클러스터 (자기 자신)
-    namespace: popcon
-
+    server: https://kubernetes.default.svc
+    namespace: popcon-staging
   syncPolicy:
     automated:
-      prune: true       # GitOps 레포에서 삭제된 리소스는 클러스터에서도 삭제
-      selfHeal: true    # 클러스터에서 직접 변경된 내용을 GitOps 기준으로 되돌림
+      prune: true
+      selfHeal: true
     syncOptions:
       - CreateNamespace=true
 ```
 
-### Application 적용
+### Application 적용 (1회 수동 apply)
 
 ```bash
-# GitOps 레포 클론 후
-sudo kubectl apply -f argocd/application.yaml
+# EC2에서 실행
+sudo kubectl apply -f /home/ec2-user/gitops/argocd/application.yaml
 
 # 동기화 상태 확인
 sudo kubectl get application -n argocd
 ```
 
-또는 ArgoCD 웹 UI에서:
-1. `+ NEW APP` 클릭
-2. Application Name: `popcon-staging`
-3. Repository URL: `https://github.com/kt-cloud-TECHUP-T1/gitops.git`
-4. Path: `k8s/overlays/staging`
-5. Cluster: `https://kubernetes.default.svc`
-6. Namespace: `popcon`
-7. Sync Policy: `Automatic` 체크
+| 상태 | 의미 |
+|------|------|
+| `Synced` | GitOps 레포와 클러스터 상태 일치 |
+| `OutOfSync` | 변경 감지, 동기화 예정 |
+| `Healthy` | 모든 Pod 정상 |
+| `Unknown` | 상태 평가 중 또는 repo 연결 문제 |
+
+> **Unknown 상태 해결**: argocd-repo-server pod 재시작
+> ```bash
+> sudo kubectl delete pod -n argocd -l app.kubernetes.io/name=argocd-repo-server
+> ```
 
 ---
 
-## 5. CI 파이프라인 연동
+## 5. ArgoCD 도메인 연결
 
-### 흐름
+Cloudflare + ALB + Traefik을 통해 `argocd.popcon.store`로 접속합니다.
+
+### 트래픽 흐름
 
 ```
-코드 push → GitHub Actions
-  → Docker 빌드 → ECR 푸시 (backend-<sha> 태그)
-  → gitops 레포의 kustomization.yaml 이미지 태그 업데이트
-  → ArgoCD가 변경 감지 → 자동 배포
+사용자 (https://argocd.popcon.store)
+    ↓
+Cloudflare DNS (CNAME → ALB)
+    ↓
+ALB (HTTPS 443 → HTTP 80, SSL 종단)
+    ↓
+Traefik (EC2 포트 80, host header 기반 라우팅)
+    ↓
+ArgoCD (HTTP 모드)
 ```
 
-### GitHub Actions 수정 (.github/workflows/deploy-backend.yml)
+### ArgoCD insecure 모드 설정
 
-pop-con-backend 레포에 추가하는 워크플로우입니다.
+ALB가 SSL을 처리하므로 ArgoCD는 HTTP로 동작합니다.
+
+```bash
+# argocd/argocd-insecure-cm.yaml
+sudo kubectl apply -f /home/ec2-user/gitops/argocd/argocd-insecure-cm.yaml
+
+# argocd/argocd-ingress.yaml
+sudo kubectl apply -f /home/ec2-user/gitops/argocd/argocd-ingress.yaml
+
+# argocd-server 재시작 (설정 적용)
+sudo kubectl rollout restart deployment argocd-server -n argocd
+```
+
+### argocd-ingress.yaml 내용
 
 ```yaml
-name: Build and Deploy Backend
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-ingress
+  namespace: argocd
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: argocd.popcon.store
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80
+```
+
+### Cloudflare DNS 설정
+
+```
+타입: CNAME
+이름: argocd
+대상: t1-staging-ec2-alb-xxxx.ap-northeast-2.elb.amazonaws.com
+```
+
+> **주의**: argocd 네임스페이스는 GitOps Application 관리 대상이 아니므로
+> 위 파일들은 EC2에서 직접 kubectl apply로 적용합니다 (bootstrap 방식).
+
+---
+
+## 6. 모니터링 스택 배포
+
+Prometheus + Grafana + Loki + Promtail을 ArgoCD Multi-Source Application으로 배포합니다.
+
+### 배포 방법 (1회 수동 apply)
+
+```bash
+sudo kubectl apply -f /home/ec2-user/gitops/staging/monitoring/argocd-apps/prometheus-app.yaml
+sudo kubectl apply -f /home/ec2-user/gitops/staging/monitoring/argocd-apps/loki-app.yaml
+```
+
+### 상태 확인
+
+```bash
+sudo kubectl get application -n argocd
+sudo kubectl get pods -n monitoring
+```
+
+### 주의사항
+
+- `values-loki.yaml`에서 `/var/log/pods` extraVolumeMounts 중복 설정 시 Promtail DaemonSet 배포 실패
+  - loki-stack 차트가 이미 `/var/log/pods`를 기본 마운트함
+- k3s 환경에서 비활성화 필요한 컴포넌트 (values-prometheus.yaml에 설정):
+  - `kubeControllerManager`, `kubeScheduler`, `kubeEtcd` 등
+
+---
+
+## 7. CI 파이프라인 연동
+
+### 현재 상태
+
+| 단계 | 상태 |
+|------|------|
+| 코드 push → GitHub Actions 트리거 | ✅ (dev 브랜치) |
+| Docker 이미지 빌드 + ECR push | ✅ |
+| kustomization.yaml 태그 자동 업데이트 | ❌ (미구현) |
+| gitops 레포 push → ArgoCD 자동 배포 | ❌ (미구현) |
+
+### staging 브랜치 워크플로우 추가 필요
+
+`pop-con-backend/.github/workflows/deploy-staging.yml` 예시:
+
+```yaml
+name: CI/CD(STAGING) - Build and Deploy
 
 on:
   push:
-    branches: [ dev ]
+    branches:
+      - staging
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
           aws-region: ap-northeast-2
 
-      - name: Login to ECR
+      - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push Docker image
-        id: build
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: backend-${{ github.sha }}
-        run: |
-          docker build -t $ECR_REGISTRY/dev-app:$IMAGE_TAG .
-          docker push $ECR_REGISTRY/dev-app:$IMAGE_TAG
-          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+      - name: Set short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::10}" >> $GITHUB_ENV
 
-      - name: Update image tag in GitOps repo
+      - name: Build and push image to ECR
+        run: |
+          docker build -t ${{ steps.login-ecr.outputs.registry }}/auth-service:${{ env.SHORT_SHA }} .
+          docker push ${{ steps.login-ecr.outputs.registry }}/auth-service:${{ env.SHORT_SHA }}
+
+      - name: Update kustomization.yaml image tag
         env:
-          IMAGE_TAG: ${{ steps.build.outputs.image_tag }}
           GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
         run: |
           git clone https://x-access-token:${GITOPS_TOKEN}@github.com/kt-cloud-TECHUP-T1/gitops.git
-          cd gitops
+          cd gitops/staging
 
-          # kustomization.yaml의 이미지 태그 업데이트
-          cd k8s/overlays/staging
           kustomize edit set image \
-            654654578161.dkr.ecr.ap-northeast-2.amazonaws.com/dev-app=${IMAGE_TAG}
+            auth-service=274130523831.dkr.ecr.ap-northeast-2.amazonaws.com/auth-service:${{ env.SHORT_SHA }}
 
           git config user.email "github-actions@github.com"
           git config user.name "github-actions[bot]"
           git add kustomization.yaml
-          git commit -m "chore: update backend image to ${IMAGE_TAG}"
+          git commit -m "chore: staging auth-service 이미지 태그 업데이트 ${{ env.SHORT_SHA }}"
           git push
 ```
 
 ### GITOPS_TOKEN 설정
 
-pop-con-backend 레포의 GitHub Secrets에 추가:
-
 ```
-Settings → Secrets and variables → Actions → New repository secret
-
-Name:  GITOPS_TOKEN
-Value: GitHub Personal Access Token (gitops 레포 write 권한 필요)
-       → GitHub → Settings → Developer settings → Personal access tokens
-       → Permissions: repo (전체)
+pop-con-backend 레포 → Settings → Secrets → Actions → New secret
+Name: GITOPS_TOKEN
+Value: GitHub PAT (gitops 레포 write 권한)
 ```
 
 ---
 
-## 6. 배포 흐름 확인
+## 8. 트러블슈팅
 
-### ArgoCD에서 동기화 상태 확인
+### ArgoCD CRD annotation 크기 초과
+
+```
+에러: metadata.annotations: Too long: may not be more than 262144 bytes
+해결: kubectl apply --server-side 사용
+```
+
+### argocd-repo-server Completed 상태
+
+```
+증상: repo-server가 Running 대신 Completed → Application Unknown 상태
+해결: sudo kubectl delete pod -n argocd -l app.kubernetes.io/name=argocd-repo-server
+```
+
+### flannel NetworkPolicy 차단
+
+```
+에러: dial tcp: connect: connection refused (argocd-repo-server)
+원인: k3s flannel은 NetworkPolicy 미지원
+해결: sudo kubectl delete networkpolicy -n argocd --all
+```
+
+### git dubious ownership
+
+```
+에러: fatal: detected dubious ownership in repository
+해결: sudo git config --global --add safe.directory /home/ec2-user/gitops
+```
+
+### Promtail DaemonSet Missing
+
+```
+에러: DaemonSet "loki-stack-promtail" is invalid: volumeMounts must be unique
+원인: values-loki.yaml에 /var/log/pods extraVolumeMount 중복
+해결: values-loki.yaml에서 extraVolumes, extraVolumeMounts 섹션 제거
+```
+
+### Application Unknown 상태에서 자동 sync 안 됨
+
+```
+로그: Skipping auto-sync: application status is Unknown
+해결: sudo kubectl annotate application <app-name> -n argocd argocd.argoproj.io/refresh=hard --overwrite
+```
+
+---
+
+## 9. 빠른 참고 명령어
 
 ```bash
+# 전체 Pod 상태
+sudo kubectl get pods -A
+
 # Application 상태
 sudo kubectl get application -n argocd
 
-# 상세 상태
-sudo kubectl describe application popcon-staging -n argocd
-```
+# Application 강제 refresh
+sudo kubectl annotate application popcon-staging -n argocd argocd.argoproj.io/refresh=hard --overwrite
 
-| 상태 | 의미 |
-|------|------|
-| `Synced` | GitOps 레포와 클러스터 상태 일치 |
-| `OutOfSync` | GitOps 레포 변경 감지, 동기화 예정 |
-| `Healthy` | 모든 Pod 정상 |
-| `Degraded` | Pod 일부 비정상 |
+# repo-server 재시작
+sudo kubectl delete pod -n argocd -l app.kubernetes.io/name=argocd-repo-server
 
-### 수동 동기화 (자동 동기화 전 테스트용)
+# 메모리 확인
+free -h
 
-```bash
-argocd app sync popcon-staging
-```
+# gitops 레포 최신화
+sudo git -C /home/ec2-user/gitops pull
 
-### 배포 히스토리 확인
+# 모니터링 Application 등록
+sudo kubectl apply -f /home/ec2-user/gitops/staging/monitoring/argocd-apps/prometheus-app.yaml
+sudo kubectl apply -f /home/ec2-user/gitops/staging/monitoring/argocd-apps/loki-app.yaml
 
-```bash
-argocd app history popcon-staging
-```
-
-### 롤백
-
-```bash
-# 이전 버전으로 롤백
-argocd app rollback popcon-staging <revision-number>
-```
-
----
-
-## 7. EKS 전환 시 변경사항
-
-k3s → EKS 전환 시 **GitOps 레포 구조는 그대로 유지**됩니다.
-변경이 필요한 것은 최소입니다.
-
-### 변경 필요한 것
-
-| 항목 | k3s | EKS |
-|------|-----|-----|
-| ArgoCD destination | `https://kubernetes.default.svc` | EKS 클러스터 URL 추가 |
-| ECR Secret | 수동 생성 | IRSA (IAM Roles for Service Accounts)로 대체 |
-| NodePort | 30080 | LoadBalancer 또는 Ingress로 변경 |
-| 볼륨 | hostPath | EBS CSI Driver PVC |
-
-### overlays/prod 추가 시
-
-```yaml
-# k8s/overlays/prod/kustomization.yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-namespace: popcon
-
-resources:
-  - ../../base
-
-images:
-  - name: 654654578161.dkr.ecr.ap-northeast-2.amazonaws.com/dev-app
-    newTag: backend-latest  # prod 이미지 태그
-
-patches:
-  - path: backend-patch.yaml
-```
-
-```yaml
-# k8s/overlays/prod/backend-patch.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: popcon-backend
-spec:
-  replicas: 3          # prod은 고가용성
-```
-
-### ArgoCD에 EKS 클러스터 등록
-
-```bash
-# EKS 클러스터 kubeconfig 추가
-aws eks update-kubeconfig --name <cluster-name> --region ap-northeast-2
-
-# ArgoCD에 클러스터 등록
-argocd cluster add <context-name>
-
-# Application의 destination 변경
-# server: https://<EKS-cluster-endpoint>
-```
-
----
-
-## 빠른 참고 명령어
-
-```bash
-# ArgoCD Pod 상태
-sudo kubectl get pods -n argocd
-
-# Application 목록
-sudo kubectl get application -n argocd
-
-# 수동 동기화
-argocd app sync popcon-staging
-
-# 앱 상태 확인
-argocd app get popcon-staging
-
-# 로그 확인
-sudo kubectl logs -n argocd deployment/argocd-server
-
-# Kustomize 렌더링 미리보기 (배포 전 확인)
-kubectl kustomize k8s/overlays/staging
+# ArgoCD 도메인 연결 관련 apply (merge 후 1회)
+sudo kubectl apply -f /home/ec2-user/gitops/argocd/argocd-insecure-cm.yaml
+sudo kubectl apply -f /home/ec2-user/gitops/argocd/argocd-ingress.yaml
+sudo kubectl rollout restart deployment argocd-server -n argocd
 ```
