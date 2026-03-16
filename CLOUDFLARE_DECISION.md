@@ -21,7 +21,7 @@ Staging부터는 실제 운영과 동일한 도메인 구조와 보안 정책을
 
 | 항목 | Dev | Staging | Prod (예정) |
 |------|-----|---------|------------|
-| 인프라 | EC2 + Docker Compose | EC2 + K3s | EC2 + K3s |
+| 인프라 | EC2 + Docker Compose | EC2 + K3s | **AWS EKS** |
 | 배포 방식 | 수동 스크립트 | GitOps (ArgoCD) | GitOps (ArgoCD) |
 | DNS | Route53 | Cloudflare | Cloudflare |
 | WAF | 없음 | Cloudflare Free | Cloudflare Pro |
@@ -59,26 +59,32 @@ Route53은 DNS 서비스로, 도메인-IP 변환만 담당합니다.
 | 항목 | AWS 조합 | Cloudflare Free | Cloudflare Pro |
 |------|---------|----------------|---------------|
 | DNS | Route53: **$0.50/월** | 포함 | 포함 |
-| WAF (웹 ACL) | **$5.00/월** | 커스텀 룰 5개 | 커스텀 룰 무제한 |
+| WAF (웹 ACL) | **$5.00/월** | 커스텀 룰 5개 | WAF 규칙 **20개** |
 | WAF 룰 | 룰 1개당 **$1.00/월** | 포함 | 포함 |
 | WAF 요청 처리 | **$0.60/백만 요청** | 포함 | 포함 |
-| CDN | CloudFront 별도 구성 | 자동 포함 | 자동 포함 |
+| OWASP 취약점 방어 | AWS WAF Managed Rules 별도 | ❌ | ✅ |
+| 제로데이 위협 방어 | ❌ | ❌ | ✅ |
+| CDN | CloudFront 별도 구성 | 자동 포함 | 자동 포함 (Cache Analytics 포함) |
+| 이미지 최적화 | CloudFront 별도 설정 | ❌ | ✅ 원클릭 적용 |
 | DDoS 방어 | Shield Advanced: **$3,000/월** | 무제한 무료 | 무제한 무료 |
-| Rate Limiting | **$0.05/만 요청** | 기본 제공 | 고급 설정 포함 |
-| 관리자 접근 제어 | Cognito: **$0.0055/MAU** | Access 50인 무료 | 포함 |
+| Rate Limiting | **$0.05/만 요청** | 기본 제공 | 기본 제공 |
+| Cloudflare Rules | - | 5개 | **225개** |
+| 지원 | - | 커뮤니티 | 티켓 + 커뮤니티 + 개발자 문서 |
 | **월 합계** | **$18.50 ~ $3,000+** | **$0** | **$20** |
 
 ### Pro 플랜 전환 시 추가되는 기능
 
-중간 발표 이후 프로덕션 전환과 함께 Pro 플랜을 적용할 예정입니다.
+중간 발표 이후 프로덕션(EKS) 전환과 함께 Pro 플랜을 적용할 예정입니다.
 
 | 기능 | Free | Pro | 도입 목적 |
 |------|------|-----|---------|
-| WAF 커스텀 룰 수 | 5개 | 무제한 | 서비스 확장에 따른 룰 추가 대응 |
-| WAF 관리형 룰셋 (OWASP) | 일부 | 전체 | 알려진 CVE 자동 차단 |
-| Rate Limiting 세부 설정 | 기본 | 고급 | `/reservations` 임계값 정밀 제어 |
-| Image Optimization | ❌ | ✅ | 팝업 스토어 이미지 로딩 최적화 |
-| WAF 분석 로그 보관 | 24시간 | 72시간 | 트래픽 이상 탐지 분석 기간 확대 |
+| WAF 규칙 수 | 5개 | **20개** | 서비스 확장에 따른 룰 추가 대응 |
+| Cloudflare Rules | 5개 | **225개** | 세밀한 트래픽 제어 |
+| OWASP 취약점 방어 | ❌ | ✅ | 알려진 공격 패턴 자동 차단 |
+| 제로데이 위협 방어 | ❌ | ✅ | 신규 취약점 선제 대응 |
+| 이미지 최적화 | ❌ | ✅ 원클릭 | 팝업 스토어 이미지 로딩 최적화 |
+| Cache Analytics | ❌ | ✅ | CDN 캐시 히트율 분석 및 최적화 |
+| 기술 지원 | 커뮤니티 | 티켓 지원 | 프로덕션 장애 대응 |
 
 ---
 
