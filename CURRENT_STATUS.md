@@ -183,9 +183,10 @@ stagingapi.popcon.store → 백엔드 API
 ## 3. Prod 전환 체크리스트
 
 ### Terraform
-- [ ] EKS 모듈 작성 (클러스터, 노드그룹, IRSA)
-- [ ] ALB Ingress Controller 설정
-- [ ] env/prod/ 생성 (RDS, ElastiCache, SSM 분리)
+- [x] EKS 모듈 작성 (클러스터, 노드그룹, IRSA) ← `modules/eks/` 완료
+- [x] ALB Ingress Controller IRSA 설정 ← `modules/eks/irsa.tf` 완료
+- [x] env/prod/ 생성 (RDS, ElastiCache, SSM 분리) ← 완료
+- [ ] modules/vpc/ 모듈 생성 및 prod 전용 VPC 구성 (진행 예정)
 
 ### GitOps
 - [ ] gitops/prod/ 디렉토리 생성
