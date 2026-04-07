@@ -1,5 +1,7 @@
 # Istio 도입 설계 (To-Be)
 
+> 최종 업데이트: 2026-04-07
+
 ## 도입 목적
 
 | 기능 | 도입 전 | 도입 후 |
@@ -20,25 +22,30 @@ ALB → Service (ClusterIP) → Pod
                               └─ 앱 컨테이너만
 ```
 
-### 변경 후
+### 변경 후 (ALB 유지 + Istio 서비스 메시)
 ```
-ALB → Istio Ingress Gateway → VirtualService → Service → Pod
-                                                          ├─ 앱 컨테이너
-                                                          └─ Envoy Sidecar (자동 주입)
-                                                                │
-                                                                └─ mTLS, 트래픽 제어, 메트릭 수집
+사용자 → Cloudflare → ALB → Service (ClusterIP) → Pod
+                                                    ├─ 앱 컨테이너
+                                                    └─ Envoy Sidecar (자동 주입)
+                                                          │
+                                                          └─ mTLS, 트래픽 제어, 메트릭 수집
 ```
+
+> **Istio Ingress Gateway를 사용하지 않는 이유**: ALB는 Cloudflare + WAF + ACM 인증서를 이미 관리하고 있음.
+> Istio는 서비스 간(East-West) 트래픽 제어에만 집중. Kiali/Jaeger는 사이드카가 수집한 데이터를 사용하므로 ALB 유지와 무관하게 동작.
 
 ---
 
 ## 설치 구성요소
 
-| 구성요소 | 역할 | 네임스페이스 |
-|---------|------|------------|
-| istiod | 컨트롤 플레인 (Pilot, Citadel, Galley) | istio-system |
-| istio-ingressgateway | 외부 트래픽 진입점 (ALB 대체 또는 병행) | istio-system |
-| Kiali | 서비스 메시 시각화 | istio-system |
-| Jaeger | 분산 트레이싱 | istio-system |
+| 구성요소 | 역할 | 네임스페이스 | 설치 방식 | 상태 |
+|---------|------|------------|---------|------|
+| istio-base | CRD, ClusterRole 등 기반 리소스 | istio-system | ArgoCD GitOps (Helm) | ✅ Synced/Healthy |
+| istiod | 컨트롤 플레인 (Pilot, Citadel, Galley) | istio-system | ArgoCD GitOps (Helm) | ✅ Synced/Healthy |
+| Kiali | 서비스 메시 시각화 | istio-system | 예정 | ⏳ |
+| Jaeger | 분산 트레이싱 | istio-system | 예정 | ⏳ |
+
+> istio-ingressgateway는 도입 계획에서 제외 (ALB 유지)
 
 ---
 
@@ -47,7 +54,7 @@ ALB → Istio Ingress Gateway → VirtualService → Service → Pod
 ### mTLS 정책 (단계적 적용)
 
 ```yaml
-# 1단계: permissive (HTTP + mTLS 모두 허용)
+# 1단계: permissive (HTTP + mTLS 모두 허용) — 검증 기간
 apiVersion: security.istio.io/v1beta1
 kind: PeerAuthentication
 metadata:
@@ -57,7 +64,7 @@ spec:
   mtls:
     mode: PERMISSIVE
 
-# 2단계: strict (mTLS만 허용)
+# 2단계: strict (mTLS만 허용) — 검증 완료 후
 apiVersion: security.istio.io/v1beta1
 kind: PeerAuthentication
 metadata:
@@ -122,24 +129,43 @@ spec:
 Karpenter가 노드를 교체할 때 sidecar injection webhook 타임아웃 방지:
 
 ```yaml
-# istiod webhook에 failurePolicy 설정
-failurePolicy: Fail → Ignore (노드 교체 중 webhook 실패 허용)
+# values-istiod.yaml 설정
+pilot:
+  autoscaleEnabled: false
+  replicaCount: 1
+meshConfig:
+  defaultConfig:
+    holdApplicationUntilProxyStarts: true  # sidecar 준비 후 앱 시작
 ```
+
+> spot 환경에서 노드 교체 중 webhook 실패 시에도 파드 기동 허용하도록 `Fail → Ignore` 정책 적용됨
 
 ---
 
 ## ArgoCD 연동 고려사항
 
-Istio가 파드에 sidecar를 주입하면 ArgoCD가 diff로 감지해 OutOfSync 판정할 수 있음.
-Application에 ignore 설정 추가 필요:
+istiod 인증서 갱신 시 caBundle 값이 변경되어 OutOfSync 발생 → ignoreDifferences 처리:
 
 ```yaml
-spec:
-  ignoreDifferences:
-    - group: apps
-      kind: Deployment
-      jsonPointers:
-        - /spec/template/metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration
+# istiod-app.yaml
+ignoreDifferences:
+  - group: admissionregistration.k8s.io
+    kind: ValidatingWebhookConfiguration
+    name: istio-validator-istio-system
+    jqPathExpressions:
+      - .webhooks[].clientConfig.caBundle
+
+# istio-base-app.yaml
+ignoreDifferences:
+  - group: apiextensions.k8s.io
+    kind: CustomResourceDefinition
+    jqPathExpressions:
+      - .spec.versions[].schema.openAPIV3Schema
+  - group: admissionregistration.k8s.io
+    kind: ValidatingWebhookConfiguration
+    name: istiod-default-validator
+    jqPathExpressions:
+      - .webhooks
 ```
 
 ---
@@ -149,7 +175,6 @@ spec:
 | 구성요소 | CPU Request | Memory Request |
 |---------|------------|---------------|
 | istiod | 500m | 2Gi |
-| ingressgateway | 100m | 128Mi |
 | Envoy sidecar (파드당) | 100m | 128Mi |
 | Kiali | 200m | 256Mi |
 | Jaeger | 200m | 256Mi |

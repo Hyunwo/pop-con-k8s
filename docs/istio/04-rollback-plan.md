@@ -1,11 +1,12 @@
 # Istio 롤백 계획서
 
+> 최종 업데이트: 2026-04-07
+
 ## 단계별 롤백 방법
 
 ### 5단계 롤백: strict → permissive
 
-```bash
-kubectl apply -f - <<EOF
+```yaml
 apiVersion: security.istio.io/v1beta1
 kind: PeerAuthentication
 metadata:
@@ -14,7 +15,6 @@ metadata:
 spec:
   mtls:
     mode: PERMISSIVE
-EOF
 ```
 
 ---
@@ -38,8 +38,13 @@ kubectl delete peerauthentication default -n popcon-prod
 
 ### 2단계 롤백: sidecar injection 비활성화
 
+```yaml
+# gitops/prod/namespace.yaml 에서 label 제거
+# istio-injection: enabled 줄 삭제 후 commit & push
+```
+
 ```bash
-kubectl label namespace popcon-prod istio-injection-
+# ArgoCD가 namespace 변경 적용 후 rolling restart
 kubectl rollout restart deployment -n popcon-prod
 ```
 
@@ -51,18 +56,24 @@ kubectl get pods -n popcon-prod
 
 ---
 
-### 1단계 롤백: Istio 완전 제거
+### 1단계 롤백: Istio 완전 제거 (ArgoCD GitOps 방식)
 
 ```bash
-helm uninstall istio-ingressgateway -n istio-system
-helm uninstall istiod -n istio-system
-helm uninstall istio-base -n istio-system
-kubectl delete namespace istio-system
+# gitops/prod/kustomization.yaml 에서 istio 항목 제거
+# - istio
+# 후 commit & push → ArgoCD가 istio-base-prod, istiod-prod Application 삭제
 ```
 
-Istio CRD 정리:
+또는 ArgoCD UI에서 직접 삭제:
+```bash
+kubectl delete application istio-base-prod -n argocd
+kubectl delete application istiod-prod -n argocd
+```
+
+잔여 CRD 정리:
 ```bash
 kubectl get crd | grep istio | awk '{print $1}' | xargs kubectl delete crd
+kubectl delete namespace istio-system
 ```
 
 ---
@@ -91,9 +102,11 @@ kubectl get destinationrule --all-namespaces
 
 ## 주의사항
 
-- Istio 제거 후 ArgoCD에서 관련 어노테이션이 남아있으면 OutOfSync 발생 가능
-  → `kubectl annotate` 또는 ArgoCD hard refresh로 해소
 - sidecar injection label 제거 후 반드시 rolling restart 필요
   → label만 제거하면 기존 파드에 sidecar가 그대로 남음
 - strict mTLS 상태에서 갑자기 sidecar를 제거하면 서비스 간 통신 단절
-  → 반드시 permissive → injection 비활성화 순서로 진행
+  → 반드시 strict → permissive → injection 비활성화 순서로 진행
+- Istio 제거 후 ArgoCD에서 관련 리소스가 남아있으면 OutOfSync 발생 가능
+  → ArgoCD hard refresh 또는 Application 재동기화로 해소
+- 1단계(Istio 완전 제거) 후에도 istio-system namespace가 Terminating 상태로 남을 수 있음
+  → 잔여 finalizer 확인: `kubectl get namespace istio-system -o yaml`

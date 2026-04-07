@@ -1,5 +1,7 @@
 # 현재 인프라 현황 (As-Is)
 
+> 최종 업데이트: 2026-04-07
+
 ## 클러스터 구성
 
 | 항목 | 내용 |
@@ -7,18 +9,18 @@
 | EKS 버전 | v1.35.2 |
 | 리전 | ap-northeast-2 (서울) |
 | 노드 오토스케일링 | Karpenter v1 |
-| 인스턴스 타입 | t3a.large (spot, 2 vCPU / 8GB) |
+| Karpenter 인스턴스 타입 | t3a.large (spot, 2 vCPU / 8GB) |
 | AZ | ap-northeast-2a, ap-northeast-2c |
 
 ### 노드 현황
 
 | 노드 | 역할 | 타입 | AZ | CPU | Memory |
 |------|------|------|----|-----|--------|
-| ip-10-1-10-70 | Karpenter 관리 | t3a.large spot | 2a | 5% | 29% |
-| ip-10-1-20-230 | Karpenter 관리 | t3a.large spot | 2c | 9% | 87% |
-| ip-10-1-20-167 | system (고정) | t3a.large | 2c | 6% | 86% |
+| ip-10-1-10-70 | Karpenter 관리 | t3a.large spot | 2a | 31% | 80% |
+| ip-10-1-20-230 | Karpenter 관리 | t3a.large spot | 2c | 7% | 51% |
+| ip-10-1-20-167 | system (EKS 관리형 nodegroup, 고정) | t3a.medium | 2c | 11% | 82% |
 
-> ip-10-1-20-230에 prod 파드 대부분이 집중되어 있음 (TopologySpreadConstraints ScheduleAnyway 한계)
+> **이전 이슈 해결**: t3a.xlarge 단일 노드 SPOF 발생 → Karpenter NodePool에서 xlarge 제거 → t3a.large 2개 체제로 전환
 
 ---
 
@@ -28,6 +30,7 @@
 |-------------|------|
 | popcon-prod | 애플리케이션 (백엔드 8개, 프론트엔드 1개) |
 | monitoring | Prometheus, Grafana, Loki, Promtail, Reloader |
+| istio-system | istiod (컨트롤 플레인 설치 완료, sidecar injection 준비 중) |
 | argocd | GitOps CD |
 | kube-system | Karpenter, CoreDNS, ALB Controller, EBS CSI |
 | external-secrets | External Secrets Operator (SSM → K8s Secret) |
@@ -47,6 +50,22 @@
 | backend-queue | Spring Boot | 8080 | 2 | api.popcon.store/queues |
 | backend-queue-worker | Spring Boot | 8080 | 2 | 내부 전용 |
 | backend-anti-macro | Spring Boot | 8080 | 2 | api.popcon.store/anti-macro |
+
+### 파드 분산 현황 (2026-04-07 기준)
+
+| 서비스 | 2a (ip-10-1-10-70) | 2c (ip-10-1-20-230) | 2c system |
+|--------|-------------------|---------------------|-----------|
+| backend-auth | ✅ | ✅ | - |
+| backend-user | ✅ | - | ✅ |
+| backend-popup | ✅ | - | ✅ |
+| backend-auction | ✅ | ✅ | - |
+| backend-draw | ✅ | ✅ | - |
+| backend-queue | ✅ | ✅ | - |
+| backend-queue-worker | ✅ | ✅ | - |
+| backend-anti-macro | ✅ | ✅ | - |
+
+> **topologySpreadConstraints + DoNotSchedule** 적용으로 파드가 반드시 다른 노드에 분산됨
+> PodDisruptionBudget (minAvailable: 1) 전 서비스 적용
 
 ---
 
@@ -84,7 +103,7 @@ backend-*-svc         → RDS MySQL (t1-prod-rds, 3306)
 backend-*-svc         → ElastiCache Redis (t1-prod-redis, 6379)
 ```
 
-> 모든 서비스 간 통신은 **HTTP 평문 (ClusterIP)**, mTLS 없음
+> 모든 서비스 간 통신은 **HTTP 평문 (ClusterIP)**, mTLS 없음 → Istio 도입으로 해결 예정
 
 ---
 
@@ -101,6 +120,7 @@ backend-*-svc         → ElastiCache Redis (t1-prod-redis, 6379)
 | backend-queue-worker | 100m | 500m | 256Mi | 768Mi | ~310Mi |
 | backend-anti-macro | 50m | 250m | 128Mi | 512Mi | ~26Mi |
 | frontend | - | - | - | - | ~51Mi |
+| istiod | 500m | 1000m | 2Gi | 2Gi | - |
 
 > JVM 설정: `-XX:InitialRAMPercentage=75 -XX:MaxRAMPercentage=75` → limit의 75% = 최대 576Mi 힙
 
@@ -133,4 +153,5 @@ GitHub Actions
 | 트래픽 관리 | ❌ retry, circuit breaker, canary 불가 |
 | 분산 트레이싱 | ❌ 없음 |
 | 서비스 간 레이턴시 관측 | ❌ 불가 |
-| 파드 분산 보장 | ⚠️ ScheduleAnyway로 한 노드 쏠림 가능 |
+| 파드 분산 보장 | ✅ DoNotSchedule + PDB 적용 완료 |
+| 노드 SPOF | ✅ t3a.xlarge 단일 SPOF 제거, 2× t3a.large 체제 |
