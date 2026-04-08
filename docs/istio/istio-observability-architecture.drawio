@@ -1,0 +1,295 @@
+<mxfile host="app.diagrams.net" modified="2026-04-08" version="21.0.0">
+  <diagram name="Istio Observability Architecture" id="istio-observability">
+    <mxGraphModel dx="1422" dy="762" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3200" pageHeight="2000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ============================================================ -->
+        <!-- TITLE                                                         -->
+        <!-- ============================================================ -->
+        <mxCell id="title" value="&lt;b&gt;Pop-Con Istio 관측성 아키텍처 (Observability Stack)&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=22;fontStyle=1;fontColor=#232F3E;" vertex="1" parent="1">
+          <mxGeometry x="800" y="20" width="1400" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- EKS CLUSTER 외곽                                              -->
+        <!-- ============================================================ -->
+        <mxCell id="eks-cluster" value="&lt;b&gt;EKS Cluster  (ap-northeast-2)&lt;/b&gt;" style="swimlane;startSize=40;fillColor=#FFF8E1;strokeColor=#FF6D00;strokeWidth=3;fontColor=#E65100;fontSize=15;fontStyle=1;rounded=1;arcSize=1;" vertex="1" parent="1">
+          <mxGeometry x="30" y="80" width="3100" height="1880" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- 외부 트래픽                                                    -->
+        <!-- ============================================================ -->
+        <mxCell id="user" value="&lt;b&gt;사용자&lt;/b&gt;&lt;br&gt;(15,000명 동시접속)" style="shape=mxgraph.aws4.user;fillColor=#232F3E;strokeColor=#ffffff;fontColor=#ffffff;fontSize=11;fontStyle=1;labelPosition=center;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="80" y="200" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="cloudflare" value="&lt;b&gt;Cloudflare&lt;/b&gt;&lt;br&gt;DNS · WAF · CDN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F48120;strokeColor=#CF6F17;fontColor=#ffffff;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="340" width="140" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="alb" value="&lt;b&gt;AWS ALB&lt;/b&gt;&lt;br&gt;internet-facing&lt;br&gt;HTTPS:443" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FF9900;strokeColor=#CC7A00;fontColor=#ffffff;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="470" width="140" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- user → cloudflare → alb -->
+        <mxCell id="e-user-cf" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#FF6D00;strokeWidth=2;" edge="1" source="user" target="cloudflare" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-cf-alb" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#FF6D00;strokeWidth=2;" edge="1" source="cloudflare" target="alb" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- popcon-prod 네임스페이스                                       -->
+        <!-- ============================================================ -->
+        <mxCell id="ns-popcon" value="&lt;b&gt;namespace: popcon-prod&lt;/b&gt;" style="swimlane;startSize=30;fillColor=#E8F5E9;strokeColor=#2E7D32;strokeWidth=2;fontColor=#1B5E20;fontSize=13;fontStyle=1;rounded=1;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="280" y="60" width="1380" height="820" as="geometry" />
+        </mxCell>
+
+        <!-- 서비스 파드 (대표 3개 + 생략 표시) -->
+        <mxCell id="pod-auth" value="&lt;b&gt;backend-auth&lt;/b&gt;&lt;br&gt;&lt;font color='#1565C0'&gt;[App Container]&lt;/font&gt;&lt;br&gt;&lt;font color='#6A1B9A'&gt;[Envoy Sidecar]&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;" vertex="1" parent="ns-popcon">
+          <mxGeometry x="40" y="80" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pod-queue" value="&lt;b&gt;backend-queue&lt;/b&gt;&lt;br&gt;&lt;font color='#1565C0'&gt;[App Container]&lt;/font&gt;&lt;br&gt;&lt;font color='#6A1B9A'&gt;[Envoy Sidecar]&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;" vertex="1" parent="ns-popcon">
+          <mxGeometry x="40" y="200" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pod-popup" value="&lt;b&gt;backend-popup&lt;/b&gt;&lt;br&gt;&lt;font color='#1565C0'&gt;[App Container]&lt;/font&gt;&lt;br&gt;&lt;font color='#6A1B9A'&gt;[Envoy Sidecar]&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=10;" vertex="1" parent="ns-popcon">
+          <mxGeometry x="40" y="320" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="pod-etc" value="&lt;b&gt;+ 6개 서비스&lt;/b&gt;&lt;br&gt;(user/auction/draw/&lt;br&gt;queue-worker/anti-macro&lt;br&gt;/frontend)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#6A1B9A;fontSize=10;fontStyle=2;" vertex="1" parent="ns-popcon">
+          <mxGeometry x="40" y="430" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- mTLS 표시 -->
+        <mxCell id="mtls-label" value="&lt;b&gt;mTLS (PERMISSIVE)&lt;/b&gt;&lt;br&gt;서비스 간 암호화 통신" style="text;html=1;strokeColor=#6A1B9A;fillColor=#F3E5F5;align=center;fontSize=10;fontStyle=1;rounded=1;" vertex="1" parent="ns-popcon">
+          <mxGeometry x="230" y="270" width="160" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- 서비스 간 mTLS 화살표 -->
+        <mxCell id="e-auth-queue" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#6A1B9A;strokeWidth=2;dashed=1;" edge="1" source="pod-auth" target="pod-queue" parent="ns-popcon">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e-queue-popup" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#6A1B9A;strokeWidth=2;dashed=1;" edge="1" source="pod-queue" target="pod-popup" parent="ns-popcon">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Envoy → Jaeger OTLP -->
+        <mxCell id="e-envoy-jaeger-auth" value="OTLP gRPC&lt;br&gt;:4317" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7B1FA2;strokeWidth=2;fontColor=#7B1FA2;fontSize=9;" edge="1" source="pod-auth" target="jaeger" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="380" y="450" />
+              <mxPoint x="1820" y="450" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="e-envoy-jaeger-queue" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7B1FA2;strokeWidth=1;dashed=1;" edge="1" source="pod-queue" target="jaeger" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="380" y="570" />
+              <mxPoint x="1820" y="570" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ALB → popcon-prod -->
+        <mxCell id="e-alb-pod" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#FF9900;strokeWidth=2;" edge="1" source="alb" target="pod-auth" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- istio-system 네임스페이스                                      -->
+        <!-- ============================================================ -->
+        <mxCell id="ns-istio" value="&lt;b&gt;namespace: istio-system&lt;/b&gt;" style="swimlane;startSize=30;fillColor=#E8EAF6;strokeColor=#283593;strokeWidth=2;fontColor=#1A237E;fontSize=13;fontStyle=1;rounded=1;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="280" y="940" width="2760" height="860" as="geometry" />
+        </mxCell>
+
+        <!-- istiod -->
+        <mxCell id="istiod" value="&lt;b&gt;istiod&lt;/b&gt; (×2, HA)&lt;br&gt;─────────────&lt;br&gt;· Pilot: xDS config 배포&lt;br&gt;· Citadel: mTLS 인증서 관리&lt;br&gt;· Galley: 설정 검증&lt;br&gt;─────────────&lt;br&gt;autoscale: 2~3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C5CAE9;strokeColor=#283593;fontSize=10;fontStyle=1;" vertex="1" parent="ns-istio">
+          <mxGeometry x="40" y="80" width="220" height="160" as="geometry" />
+        </mxCell>
+
+        <!-- istiod → Envoy (xDS) -->
+        <mxCell id="e-istiod-pod" value="xDS (설정 배포)&lt;br&gt;인증서 갱신" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#283593;strokeWidth=2;dashed=1;fontColor=#283593;fontSize=9;" edge="1" source="istiod" target="pod-auth" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="470" y="1120" />
+              <mxPoint x="470" y="200" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Jaeger -->
+        <mxCell id="jaeger" value="&lt;b&gt;Jaeger v2&lt;/b&gt;&lt;br&gt;─────────────&lt;br&gt;· 수신: OTLP gRPC :4317&lt;br&gt;· 수신: OTLP HTTP :4318&lt;br&gt;─────────────&lt;br&gt;[Rate Limiting 샘플링]&lt;br&gt;· 초당 최대 100개 추적&lt;br&gt;· Error 요청: 항상 추적&lt;br&gt;─────────────&lt;br&gt;Query UI: :16686" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE7F6;strokeColor=#4527A0;fontSize=10;fontStyle=1;" vertex="1" parent="ns-istio">
+          <mxGeometry x="600" y="60" width="240" height="220" as="geometry" />
+        </mxCell>
+
+        <!-- Elasticsearch -->
+        <mxCell id="elasticsearch" value="&lt;b&gt;Elasticsearch&lt;/b&gt;&lt;br&gt;(single-node)&lt;br&gt;─────────────&lt;br&gt;· 트레이싱 데이터 저장&lt;br&gt;· PVC 30Gi (gp3)&lt;br&gt;· 약 30일치 보관&lt;br&gt;─────────────&lt;br&gt;:9200" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9C4;strokeColor=#F9A825;fontSize=10;fontStyle=1;" vertex="1" parent="ns-istio">
+          <mxGeometry x="1000" y="60" width="200" height="220" as="geometry" />
+        </mxCell>
+
+        <!-- Kiali -->
+        <mxCell id="kiali" value="&lt;b&gt;Kiali&lt;/b&gt;&lt;br&gt;─────────────&lt;br&gt;서비스 메시 시각화&lt;br&gt;─────────────&lt;br&gt;· 서비스 토폴로지 그래프&lt;br&gt;· mTLS 상태 확인&lt;br&gt;· 트래픽 흐름 실시간 모니터링&lt;br&gt;· Jaeger 트레이싱 연동&lt;br&gt;─────────────&lt;br&gt;:20001" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1F5FE;strokeColor=#0277BD;fontSize=10;fontStyle=1;" vertex="1" parent="ns-istio">
+          <mxGeometry x="1360" y="60" width="220" height="240" as="geometry" />
+        </mxCell>
+
+        <!-- Jaeger → ES -->
+        <mxCell id="e-jaeger-es" value="트레이싱 저장&lt;br&gt;:9200" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#F9A825;strokeWidth=2;fontColor=#F9A825;fontSize=9;" edge="1" source="jaeger" target="elasticsearch" parent="ns-istio">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Kiali → Jaeger -->
+        <mxCell id="e-kiali-jaeger" value="트레이싱 조회&lt;br&gt;:16686" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#4527A0;strokeWidth=2;fontColor=#4527A0;fontSize=9;" edge="1" source="kiali" target="jaeger" parent="ns-istio">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- monitoring 네임스페이스                                        -->
+        <!-- ============================================================ -->
+        <mxCell id="ns-monitoring" value="&lt;b&gt;namespace: monitoring&lt;/b&gt;" style="swimlane;startSize=30;fillColor=#FFF3E0;strokeColor=#E65100;strokeWidth=2;fontColor=#BF360C;fontSize=13;fontStyle=1;rounded=1;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="1780" y="60" width="1220" height="820" as="geometry" />
+        </mxCell>
+
+        <!-- Prometheus -->
+        <mxCell id="prometheus" value="&lt;b&gt;Prometheus&lt;/b&gt;&lt;br&gt;─────────────&lt;br&gt;메트릭 수집&lt;br&gt;:9090" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontSize=10;fontStyle=1;" vertex="1" parent="ns-monitoring">
+          <mxGeometry x="40" y="80" width="180" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Grafana -->
+        <mxCell id="grafana" value="&lt;b&gt;Grafana&lt;/b&gt;&lt;br&gt;─────────────&lt;br&gt;대시보드 시각화&lt;br&gt;:3000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontSize=10;fontStyle=1;" vertex="1" parent="ns-monitoring">
+          <mxGeometry x="260" y="80" width="180" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Loki -->
+        <mxCell id="loki" value="&lt;b&gt;Loki&lt;/b&gt;&lt;br&gt;─────────────&lt;br&gt;로그 수집/저장&lt;br&gt;:3100" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#E65100;fontSize=10;fontStyle=1;" vertex="1" parent="ns-monitoring">
+          <mxGeometry x="480" y="80" width="180" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Prometheus → Envoy 메트릭 수집 -->
+        <mxCell id="e-prom-pod" value="메트릭 수집&lt;br&gt;(Envoy :15090)" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#E65100;strokeWidth=1;dashed=1;fontColor=#E65100;fontSize=9;" edge="1" source="prometheus" target="pod-auth" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1880" y="200" />
+              <mxPoint x="380" y="200" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Kiali → Prometheus -->
+        <mxCell id="e-kiali-prom" value="메트릭 조회&lt;br&gt;:9090" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#E65100;strokeWidth=2;fontColor=#E65100;fontSize=9;" edge="1" source="kiali" target="prometheus" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1730" y="1120" />
+              <mxPoint x="1880" y="1120" />
+              <mxPoint x="1880" y="210" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Kiali → Grafana -->
+        <mxCell id="e-kiali-grafana" value="대시보드 연동&lt;br&gt;:3000" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#FF6D00;strokeWidth=2;fontColor=#FF6D00;fontSize=9;" edge="1" source="kiali" target="grafana" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1730" y="1140" />
+              <mxPoint x="2100" y="1140" />
+              <mxPoint x="2100" y="220" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- 범례                                                           -->
+        <!-- ============================================================ -->
+        <mxCell id="legend-bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#9E9E9E;fontSize=10;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="2200" y="940" width="820" height="380" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend-title" value="&lt;b&gt;범례 (Legend)&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=13;fontStyle=1;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="2230" y="960" width="200" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg1" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7B1FA2;strokeWidth=2;" edge="1" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2230" y="1010" />
+              <mxPoint x="2330" y="1010" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="leg1-label" value="Envoy → Jaeger  OTLP 트레이싱" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="2340" y="995" width="280" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg2" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#6A1B9A;strokeWidth=2;dashed=1;" edge="1" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2230" y="1050" />
+              <mxPoint x="2330" y="1050" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="leg2-label" value="서비스 간 mTLS 통신 (암호화)" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="2340" y="1035" width="280" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg3" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#283593;strokeWidth=2;dashed=1;" edge="1" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2230" y="1090" />
+              <mxPoint x="2330" y="1090" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="leg3-label" value="istiod → Envoy  xDS 설정/인증서 배포" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="2340" y="1075" width="280" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg4" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#E65100;strokeWidth=1;dashed=1;" edge="1" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2230" y="1130" />
+              <mxPoint x="2330" y="1130" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="leg4-label" value="Prometheus  메트릭 수집 (Envoy :15090)" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="2340" y="1115" width="280" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="leg5" value="" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#FF9900;strokeWidth=2;" edge="1" parent="eks-cluster">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="2230" y="1170" />
+              <mxPoint x="2330" y="1170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="leg5-label" value="외부 트래픽  (ALB → 서비스)" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;" vertex="1" parent="eks-cluster">
+          <mxGeometry x="2340" y="1155" width="280" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- 샘플링 설명 박스                                               -->
+        <!-- ============================================================ -->
+        <mxCell id="sampling-box" value="&lt;b&gt;Rate Limiting 샘플링 전략&lt;/b&gt;&lt;br&gt;─────────────────────────&lt;br&gt;평상시: 초당 100개 요청 추적&lt;br&gt;이벤트 오픈 (15,000명 동시접속):&lt;br&gt;  → 동일하게 초당 100개만 추적&lt;br&gt;  → 스토리지 폭증 방지&lt;br&gt;에러 발생 시: 항상 추적&lt;br&gt;  → 장애 원인 분석 데이터 보장" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE7F6;strokeColor=#4527A0;fontSize=10;fontStyle=0;align=left;spacingLeft=10;" vertex="1" parent="ns-istio">
+          <mxGeometry x="600" y="360" width="300" height="180" as="geometry" />
+        </mxCell>
+
+        <!-- ============================================================ -->
+        <!-- Kiali 통합 설명 박스                                           -->
+        <!-- ============================================================ -->
+        <mxCell id="kiali-box" value="&lt;b&gt;Kiali 통합 관측 (Single Pane of Glass)&lt;/b&gt;&lt;br&gt;─────────────────────────────&lt;br&gt;① Prometheus → 서비스별 RPS, 에러율, 레이턴시&lt;br&gt;② Jaeger → 요청 흐름 추적 (auth→queue→worker)&lt;br&gt;③ Grafana → 상세 대시보드 연결&lt;br&gt;─────────────────────────────&lt;br&gt;→ 서비스 토폴로지 그래프로 한눈에 파악" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1F5FE;strokeColor=#0277BD;fontSize=10;fontStyle=0;align=left;spacingLeft=10;" vertex="1" parent="ns-istio">
+          <mxGeometry x="1360" y="360" width="360" height="200" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
