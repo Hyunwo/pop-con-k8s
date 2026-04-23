@@ -108,3 +108,46 @@ Ingress Gateway
 3. 서비스 특성에 맞는 Circuit Breaker 차등 설계 (경매/드로우는 더 엄격하게)
 4. AuthorizationPolicy로 서비스 간 접근 제어
 5. 코드 수정 없이 인프라 레벨에서 보안/모니터링 구현
+
+---
+
+## ServiceEntry (외부 서비스 명시적 허용)
+
+mTLS STRICT 환경에서 외부 서비스 접근 시 ServiceEntry 필수.
+등록하지 않으면 Envoy가 외부 요청을 차단함.
+
+```yaml
+# 예시: 카카오 OAuth
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: kakao-oauth
+  namespace: popcon-prod
+spec:
+  hosts:
+    - kauth.kakao.com
+    - kapi.kakao.com
+  ports:
+    - number: 443
+      name: https
+      protocol: HTTPS
+  location: MESH_EXTERNAL
+  resolution: DNS
+```
+
+등록된 외부 서비스:
+- RDS MySQL (3306), Redis (6379)
+- 카카오/네이버 OAuth (443)
+- 포트원 결제 API (443)
+- VQA 외부 서버 (443)
+
+## Telemetry (분산 트레이싱)
+
+- Jaeger 연동을 위한 Telemetry 리소스 설정
+- Envoy 사이드카에서 트레이스 자동 수집
+- 코드 수정 없이 서비스 간 호출 흐름 추적 가능
+
+## Observability Ingress
+
+- Grafana, Kiali, Jaeger 등 모니터링 도구를 외부에서 접근 가능하도록
+- 별도 Ingress 설정 (observability-ingress.yaml)
