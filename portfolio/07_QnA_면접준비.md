@@ -162,3 +162,23 @@
 > 저희 서비스에서 비동기 처리가 필요한 구간은 대기열 워커 정도였고,
 > 이 정도 규모에서는 Redis 기반 큐로 충분히 처리 가능하다고 판단했습니다.
 > 서비스가 더 커지고 메시지 재처리나 이벤트 소싱이 필요해진다면 Kafka 도입을 검토할 수 있습니다.
+
+---
+
+## IRSA
+
+**Q. AWS 자격증명은 어떻게 관리했나요?**
+> Access Key를 코드나 환경변수에 넣지 않고 IRSA(IAM Roles for Service Accounts)를 사용했습니다.
+> ServiceAccount에 IAM Role ARN을 어노테이션으로 달면, EKS가 OIDC 토큰을 자동으로 마운트해서
+> AWS STS로부터 임시 자격증명을 발급받아 AWS 리소스에 접근합니다.
+
+**Q. IRSA를 어떤 서비스에 적용했나요?**
+> ALB Controller, External Secrets, EBS CSI Driver, Loki, 그리고 backend-user 서비스에 적용했습니다.
+> backend-user는 사용자 프로필 이미지를 S3에 업로드/삭제하기 위해 S3 권한이 필요했고,
+> assets-popcon-store 버킷의 profiles/* 경로에만 접근 가능하도록 최소 권한 원칙을 적용했습니다.
+
+**Q. IRSA가 왜 Access Key보다 안전한가요?**
+> Access Key는 유출되면 영구적으로 사용 가능하지만,
+> IRSA는 STS에서 발급하는 임시 자격증명을 사용해서 자동 만료됩니다.
+> 또한 특정 네임스페이스의 특정 ServiceAccount만 해당 Role을 Assume할 수 있어서
+> 권한 범위가 명확하게 제한됩니다.
